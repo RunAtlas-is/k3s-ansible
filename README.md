@@ -174,6 +174,18 @@ Both default to `100%`, which is the whole group in one batch, so a run that doe
     k3s_server_serial: 1
     k3s_agent_serial: 1
 ```
+### Waiting for a node to come back
+
+`k3s_wait_ready` holds each node at the end of its role until the API server reports it `Ready` again. It is off by default. A server checks itself; an agent holds no kubeconfig, so its check runs on the first server.
+
+On an HA cluster, set `k3s_server_wait_etcd_voters` as well. A member that has just restarted rejoins etcd as a learner and only becomes a voter once it has caught up, and `Ready` does not report that. A learner does not count towards the quorum, so without this gate a serialised run can restart the next member while the previous one is still catching up:
+
+```yaml
+k3s_wait_ready: true
+k3s_server_wait_etcd_voters: true
+```
+
+Both gates poll for up to five minutes and are skipped in check mode. `k3s_server_wait_etcd_voters` applies only to an embedded etcd cluster with more than one server.
 
 ## Upgrading
 
