@@ -41,6 +41,8 @@ k3s_cluster:
     # k3s_server_config_mode: "0644", mode of /etc/rancher/k3s/config.yaml on server nodes. The file can contain the cluster token; set "0640" to keep it off other local accounts.
     # k3s_wait_ready: false, set to true to hold each node at the end of its role until the API server reports it Ready.
     # k3s_server_wait_etcd_voters: false, set to true to hold each server until every server started so far is an etcd voter.
+    # k3s_install_script_checksum: "", set to "sha256:<hex digest>" (from `curl -sfL https://get.k3s.io | sha256sum`) to verify the fetched install script before it runs as root.
+    # k3s_airgap_binary_checksum: "", set to the plain sha256 hex digest (no "sha256:" prefix) of the K3s binary in airgap_dir to verify the copy distributed to each node.
 
     # To roll the nodes one at a time, see "Rolling the nodes one at a time" in
     # the README. k3s_server_serial and k3s_agent_serial set a play keyword, so
