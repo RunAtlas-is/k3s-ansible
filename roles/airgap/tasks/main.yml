@@ -63,14 +63,14 @@
         # supplied to airgap_dir matches what they intended to ship; it says
         # nothing about the file's provenance.
         - name: Read back the distributed K3s binary checksum
-          when: k3s_airgap_binary_checksum
+          when: k3s_airgap_binary_checksum | length > 0
           ansible.builtin.stat:
             path: /usr/local/bin/k3s
             checksum_algorithm: sha256
           register: airgap_k3s_binary_stat
 
         - name: Verify the distributed K3s binary checksum
-          when: k3s_airgap_binary_checksum
+          when: k3s_airgap_binary_checksum | length > 0
           ansible.builtin.assert:
             that: airgap_k3s_binary_stat.stat.checksum == k3s_airgap_binary_checksum
             fail_msg: >-
