@@ -29,6 +29,7 @@
         owner: root
         group: root
         mode: "0755"
+        checksum: "{{ k3s_install_script_checksum or omit }}"
 
     - name: Set skip_download var for install script
       # noqa var-naming[no-role-prefix]

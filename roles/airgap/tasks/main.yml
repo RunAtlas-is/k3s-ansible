@@ -29,6 +29,7 @@
             timeout: 120
             dest: "{{ airgap_dir }}/k3s-install.sh"
             mode: "0755"
+            checksum: "{{ k3s_install_script_checksum or omit }}"
 
         - name: Distribute K3s install script
           ansible.builtin.copy:
@@ -56,6 +57,26 @@
               # with_first_found always runs, even inside the when block
               # so we need to skip it if the file is not found
               skip: true
+
+        # copy has no checksum parameter, so the distributed binary is read back
+        # and compared explicitly. This only verifies that the file the operator
+        # supplied to airgap_dir matches what they intended to ship; it says
+        # nothing about the file's provenance.
+        - name: Read back the distributed K3s binary checksum
+          when: k3s_airgap_binary_checksum
+          ansible.builtin.stat:
+            path: /usr/local/bin/k3s
+            checksum_algorithm: sha256
+          register: airgap_k3s_binary_stat
+
+        - name: Verify the distributed K3s binary checksum
+          when: k3s_airgap_binary_checksum
+          ansible.builtin.assert:
+            that: airgap_k3s_binary_stat.stat.checksum == k3s_airgap_binary_checksum
+            fail_msg: >-
+              The K3s binary distributed to /usr/local/bin/k3s does not match
+              k3s_airgap_binary_checksum. Confirm the file in airgap_dir is the
+              one the checksum was computed against.
 
         # Dependencies are listed first so they get installed first in the next task
         - name: Distribute K3s SELinux RPM
