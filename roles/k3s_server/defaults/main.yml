@@ -22,3 +22,12 @@ extra_install_envs: {} # noqa var-naming[no-role-prefix]
 k3s_node_name: "{{ ansible_facts['nodename'] | default(inventory_hostname, true) | lower }}"  # noqa var-naming[no-role-prefix]
 k3s_wait_ready: false  # noqa var-naming[no-role-prefix]
 k3s_server_wait_etcd_voters: false
+# The install script is fetched over TLS but executed as root with no
+# signature check of its own. Set this to the script's sha256, in the
+# "sha256:<hex>" form get_url expects, to fail the download rather than run a
+# script that changed underneath the pin. Obtain it with
+# `curl -sfL https://get.k3s.io | sha256sum`. The script changes with
+# upstream K3s releases, so a pinned value needs updating alongside
+# k3s_version. Empty by default, which leaves the download unverified as
+# before.
+k3s_install_script_checksum: ""  # noqa var-naming[no-role-prefix]

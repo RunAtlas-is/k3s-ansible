@@ -1,3 +1,15 @@
 ---
 server_group: server # noqa var-naming[no-role-prefix]
 agent_group: agent # noqa var-naming[no-role-prefix]
+# See the k3s_server role default for what this pins and how to obtain it.
+# Only used on the initial download to airgap_dir; a k3s-install.sh already
+# present there is distributed as-is.
+k3s_install_script_checksum: "" # noqa var-naming[no-role-prefix]
+# The K3s binary in airgap_dir is supplied by the operator, not fetched by
+# this role. Set this to its plain sha256 hex digest (no "sha256:" prefix,
+# unlike k3s_install_script_checksum: this is compared against a stat result,
+# not passed to get_url) to verify the copy distributed to /usr/local/bin/k3s
+# matches the file the digest was computed against. Obtain it with
+# `sha256sum <airgap_dir>/k3s-<arch>`. Empty by default, which leaves the
+# copy unverified as before.
+k3s_airgap_binary_checksum: "" # noqa var-naming[no-role-prefix]

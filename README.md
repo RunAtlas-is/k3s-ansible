@@ -154,6 +154,16 @@ k3s_server_config_mode: "0640"
 
 K3s reads the file as root, so `0600` is the safe floor: no other account needs the file. The default stays `0644`, which is the mode the file already has on a running cluster, so a re-run changes nothing until the variable is set. The upgrade role rewrites the same file and honors the same variable.
 
+### Verifying the K3s install script
+
+The `k3s_server`, `k3s_agent`, and `airgap` roles fetch the install script from `https://get.k3s.io/` over TLS and then run it as root. TLS authenticates the server, not the script's contents, and the script itself is what verifies the K3s binary it downloads against upstream's published checksum, so an unpinned fetch trusts whatever the URL currently returns. Set `k3s_install_script_checksum` to pin it:
+
+```yaml
+k3s_install_script_checksum: "sha256:<hex digest>"
+```
+
+Obtain the digest with `curl -sfL https://get.k3s.io | sha256sum`. The script changes with upstream K3s releases, so a pinned digest needs updating alongside `k3s_version`; a stale pin fails the download rather than silently running an old script. The default is empty, which leaves the download unverified as before.
+
 ### Rolling the nodes one at a time
 
 The server and agent roles restart their k3s service on every run, not only when something changed, and by default Ansible runs each play against every host in the group at once. On a cluster with three or more servers that restarts every etcd member together, which loses the quorum and the API server with it.
@@ -241,7 +251,9 @@ airgap_dir: ./my-airgap # Paths are relative to the playbooks directory
 Additionally, if deploying on an OS with SELinux, you will also need to download the latest [k3s-selinux RPM](https://github.com/k3s-io/k3s-selinux/releases/latest) and its dependencies `selinux-policy` and `container-selinux` RPMs and place them in the airgap folder.
 
 
-It is assumed that the control node has access to the internet. The playbook will automatically download the k3s install script on the control node, and then distribute all three artifacts to the managed nodes. 
+It is assumed that the control node has access to the internet. The playbook will automatically download the k3s install script on the control node, and then distribute all three artifacts to the managed nodes.
+
+The K3s binary in `airgap_dir` is supplied by you, not fetched by the role, so nothing checks it against upstream by default. Set `k3s_airgap_binary_checksum` to its plain sha256 hex digest (`sha256sum <airgap_dir>/k3s-<arch>`, no `sha256:` prefix) and the role verifies the copy distributed to `/usr/local/bin/k3s` on each node against it, failing the play on a mismatch. The role also honors `k3s_install_script_checksum` (see [Verifying the K3s install script](#verifying-the-k3s-install-script)) on the install script it downloads to `airgap_dir`.
 
 ## Kubeconfig
 

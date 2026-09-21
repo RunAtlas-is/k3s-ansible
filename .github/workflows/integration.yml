@@ -591,13 +591,20 @@ jobs:
       - name: Download K3s airgap artifacts
         run: |
           mkdir -p ./playbooks/test-airgap
-          wget -P ./playbooks/test-airgap https://github.com/k3s-io/k3s/releases/download/v1.33.8%2Bk3s1/k3s-airgap-images-amd64.tar.gz 
-          wget -P ./playbooks/test-airgap https://github.com/k3s-io/k3s/releases/download/v1.33.8%2Bk3s1/k3s 
+          wget -P ./playbooks/test-airgap https://github.com/k3s-io/k3s/releases/download/v1.33.8%2Bk3s1/k3s-airgap-images-amd64.tar.gz
+          wget -P ./playbooks/test-airgap https://github.com/k3s-io/k3s/releases/download/v1.33.8%2Bk3s1/k3s
+
+      # Exercises k3s_airgap_binary_checksum end to end: a wrong digest here
+      # would fail the play's assert task rather than silently distributing
+      # the binary.
+      - name: Checksum the downloaded K3s binary
+        id: airgap-checksum
+        run: echo "digest=$(sha256sum ./playbooks/test-airgap/k3s | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
       - name: Run Playbook
         env:
           ANSIBLE_FORCE_COLOR: '1'
-        run: ansible-playbook playbooks/site.yml -i tests/airgap.yml
+        run: ansible-playbook playbooks/site.yml -i tests/airgap.yml -e k3s_airgap_binary_checksum=${{ steps.airgap-checksum.outputs.digest }}
 
       - name: Verify K3s is running on servers
         run: docker exec server-node k3s kubectl get nodes | grep Ready | wc -l | grep 2
