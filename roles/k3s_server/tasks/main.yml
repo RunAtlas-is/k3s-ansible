@@ -359,7 +359,7 @@
     # so far. A re-run meets a cluster that already holds more nodes, which the
     # comparison allows. The opt-in gates below are the ones that match by name.
     - name: Verify that the servers started so far joined
-      when: (groups[server_group] | length) > 1
+      when: not ansible_check_mode and (groups[server_group] | length) > 1
       ansible.builtin.command:
         cmd: >
           k3s kubectl get nodes -l "node-role.kubernetes.io/control-plane=true" -o=jsonpath="{.items[*].metadata.name}"
@@ -385,9 +385,11 @@
 # A restart takes the node out of service for a moment. These two gates hold the
 # play at the end of the role until the node is back, and pass at once on a node
 # that did not restart. They are independent: Ready says the kubelet has
-# registered and accepts workload, and says nothing about etcd.
+# registered and accepts workload, and says nothing about etcd. Check mode skips
+# the read, and a skipped read would otherwise retry until the budget runs out.
 - name: Wait for this server to report Ready
   when:
+    - not ansible_check_mode
     - k3s_wait_ready | bool
   ansible.builtin.command:
     cmd: >-
@@ -407,6 +409,7 @@
 # hold etcd.
 - name: Wait for the servers started so far to be etcd voters
   when:
+    - not ansible_check_mode
     - k3s_server_wait_etcd_voters | bool
     # A single server is its own quorum, and a cluster on an external datastore
     # has no embedded etcd members to promote.

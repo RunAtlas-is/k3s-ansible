@@ -213,7 +213,10 @@
 # NotReady. Under a serialised agent play this gate holds the batch until the
 # node carries workload again, and passes at once on a node that did not restart.
 - name: Wait for this agent to report Ready
-  when: k3s_wait_ready | bool
+  when:
+    - k3s_wait_ready | bool
+    # Check mode skips the read, which would otherwise retry to the budget.
+    - not ansible_check_mode
   # An agent holds no kubeconfig, so the read runs on the first server. The node
   # name comes from a fact of this agent, which delegation does not replace.
   delegate_to: "{{ groups[server_group][0] }}"
