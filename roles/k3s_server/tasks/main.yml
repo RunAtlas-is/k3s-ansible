@@ -1,14 +1,69 @@
 ---
+# A read, so it runs in check mode too: the install decision below depends on
+# the version it reports.
 - name: Get k3s installed version
   ansible.builtin.command: k3s --version
   register: k3s_server_version_output
   changed_when: false
   failed_when: false
+  check_mode: false
 
 - name: Set k3s installed version
-  when: not ansible_check_mode and k3s_server_version_output.rc == 0
+  when: k3s_server_version_output.rc == 0
   ansible.builtin.set_fact:
     k3s_server_installed_version: "{{ k3s_server_version_output.stdout_lines[0].split(' ')[2] }}"
+
+# A check run against a host without K3s has no service, kubeconfig or token to
+# read yet; the install and the state record below still report the pending
+# change there.
+- name: Note a check run against a host without K3s
+  ansible.builtin.set_fact:
+    k3s_server_check_on_clean_host: "{{ ansible_check_mode and k3s_server_version_output.rc != 0 }}"
+
+- name: Set k3s server service files based on init system
+  ansible.builtin.set_fact:
+    k3s_server_env_file: "{{ (ansible_facts['service_mgr'] == 'systemd') | ternary(systemd_dir ~ '/k3s.service.env', '/etc/rancher/k3s/k3s.env') }}"
+    k3s_server_unit_file: "{{ (ansible_facts['service_mgr'] == 'systemd') | ternary(systemd_dir ~ '/k3s.service', '/etc/init.d/k3s') }}"
+
+# The install script rewrites the unit file and the environment file whenever
+# it runs, so running it on every pass would leave nothing to compare against.
+# It runs when K3s is missing or older than k3s_version, when its inputs differ
+# from the ones recorded at the last start, or when the unit file no longer
+# matches the recorded one, as it does after the airgap role reinstalls it.
+- name: Read the state K3s was last started with
+  ansible.builtin.slurp:
+    src: "{{ k3s_service_state_file }}"
+  register: k3s_server_service_state_recorded
+  failed_when: false
+
+- name: Read the current K3s unit file
+  ansible.builtin.stat:
+    path: "{{ k3s_server_unit_file }}"
+  register: k3s_server_unit_stat
+
+- name: Collect the K3s install script inputs
+  vars:
+    # extra_install_envs is overridden by the required keys on purpose.
+    _install_envs: >-
+      {{ extra_install_envs | default({}) | combine({
+           'INSTALL_K3S_SKIP_START': 'true',
+           'INSTALL_K3S_VERSION': k3s_version,
+           'INSTALL_K3S_EXEC': extra_server_args}) }}
+  ansible.builtin.set_fact:
+    k3s_server_install_envs: "{{ _install_envs }}"
+    k3s_server_install_digest: "{{ _install_envs | to_json(sort_keys=true) | hash('sha256') }}"
+    k3s_server_service_state_last: >-
+      {{ (k3s_server_service_state_recorded.content | b64decode | from_json)
+         if k3s_server_service_state_recorded.content is defined else {} }}
+
+- name: Decide whether the K3s install script has to run
+  ansible.builtin.set_fact:
+    k3s_server_install_needed: >-
+      {{ k3s_server_version_output.rc != 0
+         or k3s_server_installed_version is version(k3s_version, '<')
+         or k3s_server_service_state_last.install | default('') != k3s_server_install_digest
+         or (k3s_server_service_state_last.files | default({}))[k3s_server_unit_file] | default('')
+            != k3s_server_unit_stat.stat.checksum | default('absent') }}
 
 # Recorded as a fact so the servers in later batches can read it back out of
 # hostvars, which a role default does not reach.
@@ -45,6 +100,7 @@
 
     # If token is provided, add it to the config
     - name: Add token to server config
+      no_log: true
       when: token is defined
       ansible.builtin.set_fact:
         k3s_server_config: "{{ k3s_server_config | combine({'token': token}) }}"
@@ -66,6 +122,7 @@
           {% endif %}
 
     - name: Add TLS SAN to config if needed
+      no_log: true
       when:
         - api_endpoint is defined
         - api_endpoint != ansible_facts['hostname']
@@ -75,6 +132,7 @@
         k3s_server_config: "{{ k3s_server_config | combine({'tls-san': api_endpoint}) }}"
 
     - name: Add cluster-init to server config for first server in HA-IC setup
+      no_log: true
       when:
         - (groups[server_group] | length) > 1
         - inventory_hostname == groups[server_group][0] or ansible_host == groups[server_group][0]
@@ -85,12 +143,14 @@
     # If not the first server in an HA-IC setup, setup the server: URL for joining the cluster
     # server: https://{{ api_endpoint }}:{{ api_port }}
     - name: Add server URL to server config for joining servers in HA-IC setup
+      no_log: true
       when: (groups[server_group] | length) > 1 and inventory_hostname != groups[server_group][0] and not use_external_database
       ansible.builtin.set_fact:
         k3s_server_config: "{{ k3s_server_config | combine({'server': 'https://' + (api_endpoint | ansible.utils.ipwrap) + ':' + api_port | string}) }}"
 
     # If the user has provided additional server config, merge it with the generated config
     - name: Merge user server config with generated server config
+      no_log: true
       when: server_config_yaml is defined
       ansible.builtin.set_fact:
         k3s_server_config: "{{ k3s_server_config | combine(server_config_yaml | from_yaml) }}"
@@ -101,7 +161,6 @@
 #   - the installed version of K3s on the nodes is older than the requested version in ansible vars
 - name: Download artifact only if needed
   when:
-    - not ansible_check_mode
     - airgap_dir is undefined
     - ( k3s_server_version_output.rc != 0 or k3s_server_installed_version is version(k3s_version, '<') )
   block:
@@ -120,23 +179,15 @@
       ansible.builtin.set_fact:
         skip_download: "false"
 
-# We always run the install script, but we skip the download step as needed
+# The download step is skipped as needed. Check mode skips the script, and the
+# recorded state written after the start reports the pending install instead.
 - name: Run K3s install script
-  when: not ansible_check_mode
+  when: k3s_server_install_needed
   # For some reason, ansible-lint thinks using enviroment with command is an error
   # even though its valid https://ansible.readthedocs.io/projects/lint/rules/inline-env-var/#correct-code
   ansible.builtin.command: # noqa inline-env-var
     cmd: /usr/local/bin/k3s-install.sh
-  # Ensures that extra_install_envs are combined with required env vars
-  environment: "{{ _install_envs }}"
-  vars:
-    _base_envs:
-      INSTALL_K3S_SKIP_DOWNLOAD: "{{ skip_download | default('true') }}"
-      INSTALL_K3S_SKIP_START: "true"
-      INSTALL_K3S_VERSION: "{{ k3s_version }}"
-      INSTALL_K3S_EXEC: "{{ extra_server_args }}"
-    # We overrides the extra_install_envs with required keys from _base_envs on purpose
-    _install_envs: "{{ extra_install_envs | default({}) | combine(_base_envs) }}"
+  environment: "{{ k3s_server_install_envs | combine({'INSTALL_K3S_SKIP_DOWNLOAD': skip_download | default('true')}) }}"
   changed_when: true
 
 - name: Check if user bashrc exists
@@ -154,50 +205,41 @@
     regexp: '\.\s+<\(k3s completion bash\)'
     line: ". <(k3s completion bash)  # Added by k3s-ansible"
 
-- name: Set k3s server environment file based on init system
-  ansible.builtin.set_fact:
-    k3s_server_env_file: "{{ (ansible_facts['service_mgr'] == 'systemd') | ternary(systemd_dir ~ '/k3s.service.env', '/etc/rancher/k3s/k3s.env') }}"
-
 - name: Add service environment variables
   when: extra_service_envs is defined
   ansible.builtin.lineinfile:
     path: "{{ k3s_server_env_file }}"
     line: "{{ item }}"
   loop: "{{ extra_service_envs }}"
+  register: k3s_server_env_result
 
 - name: Init first server node
   when: inventory_hostname == groups[server_group][0] or ansible_host == groups[server_group][0]
   block:
+    # The file carries the cluster token, so no diff is shown for it.
     - name: Convert server config to YAML and write to file
-      when: not ansible_check_mode
       ansible.builtin.copy:
         content: "{{ k3s_server_config | to_nice_yaml }}"
         dest: "/etc/rancher/k3s/config.yaml"
         mode: "{{ k3s_server_config_mode }}"
       register: k3s_server_config_result
+      diff: false
 
     - name: Delete any existing token from the environment if different from the new one
+      diff: false
       ansible.builtin.lineinfile:
         state: absent
         path: "{{ k3s_server_env_file }}"
         regexp: "^K3S_TOKEN=\\s*(?!{{ token | default('') | regex_escape }}\\s*$)"
+      register: k3s_server_env_token_result
 
-    - name: Reload systemd daemon
-      when:
-        - not ansible_check_mode
-        - ansible_facts['service_mgr'] == 'systemd'
-      ansible.builtin.systemd:
-        daemon_reload: true
-
-    - name: Enable and start K3s service
-      when: not ansible_check_mode
-      ansible.builtin.service:
-        name: k3s
-        state: restarted
-        enabled: true
+    - name: Restart K3s only if what it starts from changed
+      ansible.builtin.include_tasks: service.yml
 
     - name: Pause to allow first server startup
-      when: (groups[server_group] | length) > 1
+      when:
+        - (groups[server_group] | length) > 1
+        - k3s_server_restart_needed
       ansible.builtin.pause:
         seconds: 10
 
@@ -215,7 +257,7 @@
     # If no changes are found, we can skip copying the kubeconfig to the control node.
     # This is dependent on the speed of the target node for k3s startup time, so retries are used.
     - name: Copy k3s.yaml to second file
-      when: not ansible_check_mode
+      when: not k3s_server_check_on_clean_host
       ansible.builtin.copy:
         src: /etc/rancher/k3s/k3s.yaml
         dest: /etc/rancher/k3s/k3s-copy.yaml
@@ -268,7 +310,7 @@
 
     - name: Get the token if randomly generated
       when:
-        - not ansible_check_mode
+        - not k3s_server_check_on_clean_host
         - token is not defined
       block:
         - name: Wait for token
@@ -276,11 +318,13 @@
             path: /var/lib/rancher/k3s/server/token
 
         - name: Read node-token from first server
+          no_log: true
           ansible.builtin.slurp:
             src: /var/lib/rancher/k3s/server/token
           register: k3s_server_node_token
 
         - name: Store random token for later servers
+          no_log: true
           # noqa var-naming[no-role-prefix]
           ansible.builtin.set_fact:
             random_token: "{{ k3s_server_node_token.content | b64decode | regex_replace('\n', '') }}"
@@ -291,52 +335,34 @@
     - inventory_hostname != groups[server_group][0] and ansible_host != groups[server_group][0]
   block:
     - name: Get token from first server if needed
+      no_log: true
       when: token is not defined and hostvars[groups[server_group][0]].random_token is defined
       # noqa var-naming[no-role-prefix]
       ansible.builtin.set_fact:
         k3s_server_config: "{{ k3s_server_config | combine({'token': hostvars[groups[server_group][0]].random_token}) }}"
 
+    # The file carries the cluster token, so no diff is shown for it.
     - name: Convert server config to YAML and write to file
-      when: not ansible_check_mode
       ansible.builtin.copy:
         content: "{{ k3s_server_config | to_nice_yaml }}"
         dest: "/etc/rancher/k3s/config.yaml"
         mode: "{{ k3s_server_config_mode }}"
       register: k3s_server_config_result
+      diff: false
 
     - name: Delete any existing token from the environment if different from the new one
+      diff: false
       ansible.builtin.lineinfile:
         state: absent
         path: "{{ k3s_server_env_file }}"
         regexp: "^K3S_TOKEN=\\s*(?!{{ token | default('') | regex_escape }}\\s*$)"
+      register: k3s_server_env_token_result
 
-    - name: Reload systemd daemon
-      when:
-        - not ansible_check_mode
-        - ansible_facts['service_mgr'] == 'systemd'
-      ansible.builtin.systemd:
-        daemon_reload: true
-
-    # Always restart a joined server so a re-run of site.yml — whether it only
-    # bumped k3s_version or changed config — brings it onto the new runtime, the
-    # same way the first server above always restarts. On a multi-server cluster
-    # set k3s_server_serial to 1 so the servers restart one at a time, and
-    # k3s_server_wait_etcd_voters so each member is a voter again before the
-    # next one restarts (see README).
-    - name: Restart K3s service
-      when:
-        - ansible_facts.services['k3s.service'] is defined
-        - ansible_facts.services['k3s.service'].state == 'running'
-      ansible.builtin.service:
-        name: k3s
-        state: restarted
-
-    - name: Enable and start K3s service
-      when: ansible_facts.services['k3s.service'] is not defined or ansible_facts.services['k3s.service'].state != 'running'
-      ansible.builtin.service:
-        name: k3s
-        state: started
-        enabled: true
+    # On a multi-server cluster set k3s_server_serial to 1 so a server that has
+    # to restart does so while the others serve, and k3s_server_wait_etcd_voters
+    # so it is a voter again before the next one restarts (see README).
+    - name: Restart K3s only if what it starts from changed
+      ansible.builtin.include_tasks: service.yml
 
     # Counted rather than matched by name: at the default serial this is the
     # whole server group, and under a serialised run it is the servers started
@@ -366,14 +392,15 @@
   run_once: true
   changed_when: false
 
-# The role restarts k3s whether or not anything changed, so every run takes the
-# node out of service for a moment. These two gates hold the play at the end of
-# the role until the node is back. They are independent: Ready says the kubelet
-# has registered and accepts workload, and says nothing about etcd.
+# A restart takes the node out of service for a moment. These two gates hold the
+# play at the end of the role until the node is back, and pass at once on a node
+# that did not restart. They are independent: Ready says the kubelet has
+# registered and accepts workload, and says nothing about etcd. Check mode skips
+# the read, and a skipped read would otherwise retry until the budget runs out.
 - name: Wait for this server to report Ready
   when:
-    - k3s_wait_ready | bool
     - not ansible_check_mode
+    - k3s_wait_ready | bool
   ansible.builtin.command:
     cmd: >-
       k3s kubectl get node {{ k3s_server_node_name }}
@@ -392,8 +419,8 @@
 # hold etcd.
 - name: Wait for the servers started so far to be etcd voters
   when:
-    - k3s_server_wait_etcd_voters | bool
     - not ansible_check_mode
+    - k3s_server_wait_etcd_voters | bool
     # A single server is its own quorum, and a cluster on an external datastore
     # has no embedded etcd members to promote.
     - (groups[server_group] | length) > 1
@@ -423,7 +450,7 @@
         mode: "u=rwx,g=rx,o="
 
     - name: Copy config file to user home directory
-      when: not ansible_check_mode
+      when: not k3s_server_check_on_clean_host
       ansible.builtin.copy:
         src: /etc/rancher/k3s/k3s.yaml
         dest: ~{{ ansible_user }}/.kube/config

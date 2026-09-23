@@ -58,6 +58,7 @@
     # We only save the token if the user did not provide one, leading to an auto-generated token on first install.
     # If you want the actual token value, you need to use the k3s_upgrade_old_token.stdout
     - name: Save the existing K3s token if needed
+      no_log: true
       when:
         - token is not defined
         - inventory_hostname == groups[server_group][0] or ansible_host == groups[server_group][0]
@@ -75,12 +76,14 @@
 
         # If token is provided, add it to the config
         - name: Add token to server config
+          no_log: true
           when: token is defined
           ansible.builtin.set_fact:
             k3s_server_config: "{{ k3s_server_config | combine({'token': token}) }}"
 
         # If token is not defined, use the old token
         - name: Add old token to server config
+          no_log: true
           when: token is not defined
           ansible.builtin.set_fact:
             k3s_server_config: "{{ k3s_server_config | combine({'token': k3s_upgrade_old_token.stdout}) }}"
@@ -102,6 +105,7 @@
               {% endif %}
 
         - name: Add TLS SAN to config if needed
+          no_log: true
           when:
             - api_endpoint is defined
             - api_endpoint != ansible_facts['hostname']
@@ -111,6 +115,7 @@
             k3s_server_config: "{{ k3s_server_config | combine({'tls-san': api_endpoint}) }}"
 
         - name: Add cluster-init to server config for first server in HA-IC setup
+          no_log: true
           when:
             - (groups[server_group] | length) > 1
             - inventory_hostname == groups[server_group][0] or ansible_host == groups[server_group][0]
@@ -121,17 +126,20 @@
         # If not the first server in an HA-IC setup, setup the server: URL for joining the cluster
         # server: https://{{ api_endpoint }}:{{ api_port }}
         - name: Add server URL to server config for joining servers in HA-IC setup
+          no_log: true
           when: (groups[server_group] | length) > 1 and inventory_hostname != groups[server_group][0] and not use_external_database
           ansible.builtin.set_fact:
             k3s_server_config: "{{ k3s_server_config | combine({'server': 'https://' + (api_endpoint | ansible.utils.ipwrap) + ':' + api_port | string}) }}"
 
         # If the user has provided additional server config, merge it with the generated config
         - name: Merge user server config with generated server config
+          no_log: true
           when: server_config_yaml is defined
           ansible.builtin.set_fact:
             k3s_server_config: "{{ k3s_server_config | combine(server_config_yaml | from_yaml) }}"
 
         - name: Convert server config to YAML and write to file
+          diff: false
           when: not ansible_check_mode
           ansible.builtin.copy:
             content: "{{ k3s_server_config | to_nice_yaml }}"
@@ -159,6 +167,7 @@
       changed_when: true
 
     - name: Get the token from the first server
+      no_log: true
       # noqa var-naming[no-role-prefix]
       when:
         - agent_group in group_names
