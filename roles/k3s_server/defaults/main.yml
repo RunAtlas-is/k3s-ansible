@@ -21,6 +21,12 @@ extra_install_envs: {} # noqa var-naming[no-role-prefix]
 # gates find the node.
 k3s_node_name: "{{ ansible_facts['nodename'] | default(inventory_hostname, true) | lower }}"  # noqa var-naming[no-role-prefix]
 k3s_wait_ready: false  # noqa var-naming[no-role-prefix]
+# The roles record here, after each start, the checksums of the files K3s
+# started from and a digest of the install script inputs. A run restarts K3s
+# only when those differ, and runs the install script only when its inputs,
+# the version or the unit file differ, so a run that changes nothing leaves
+# the service running.
+k3s_service_state_file: /etc/rancher/k3s/k3s-ansible-state.json  # noqa var-naming[no-role-prefix]
 k3s_server_wait_etcd_voters: false
 # The install script is fetched over TLS but executed as root with no
 # signature check of its own. Set this to the script's sha256, in the

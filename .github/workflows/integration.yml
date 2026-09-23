@@ -441,6 +441,31 @@ jobs:
           done
           exit 1
 
+      # A second run against the converged cluster must change nothing and
+      # restart no node, in check mode and for real. InvocationID is new on
+      # every start of a unit, so an unchanged value proves the service kept
+      # running through the run.
+      - name: Re-run site.yml on the converged cluster without a restart
+        shell: bash
+        run: |
+          invocations() {
+            for NODE in $SERVERS; do echo "$NODE $(docker exec $NODE systemctl show k3s -p InvocationID --value)"; done
+            for NODE in $AGENTS; do echo "$NODE $(docker exec $NODE systemctl show k3s-agent -p InvocationID --value)"; done
+          }
+          invocations > before.txt
+          ansible-playbook tests/serial.yml -i tests/ha.yml --check --diff \
+            -e k3s_wait_ready=true -e k3s_server_wait_etcd_voters=true | tee check.log
+          ansible-playbook tests/serial.yml -i tests/ha.yml \
+            -e k3s_wait_ready=true -e k3s_server_wait_etcd_voters=true | tee apply.log
+          invocations > after.txt
+          diff before.txt after.txt
+          for log in check.log apply.log; do
+            if grep -E 'changed=[1-9]' "$log"; then
+              echo "$log reports a change on a converged cluster"
+              exit 1
+            fi
+          done
+
       - name: Debug nodes/pods on failure
         if: failure()
         run: |

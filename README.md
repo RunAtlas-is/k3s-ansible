@@ -164,9 +164,17 @@ k3s_install_script_checksum: "sha256:<hex digest>"
 
 Obtain the digest with `curl -sfL https://get.k3s.io | sha256sum`. The script changes with upstream K3s releases, so a pinned digest needs updating alongside `k3s_version`; a stale pin fails the download rather than silently running an old script. The default is empty, which leaves the download unverified as before.
 
+### Restarting only on a change
+
+The server and agent roles restart the k3s service only when something it starts from has changed: the binary, the unit file, the environment file or `/etc/rancher/k3s/config.yaml`. After each start the role records the checksums of those files, with a digest of the install script's inputs, in `k3s_service_state_file` (default `/etc/rancher/k3s/k3s-ansible-state.json`), and the next run compares against that record. A version bump, a changed `extra_server_args`, `server_config_yaml`, `extra_service_envs` or token, or a binary replaced by the airgap role therefore restarts the node, and a run that changes none of them leaves the service running. The install script, which rewrites the unit and environment files whenever it runs, runs only when K3s is missing or older than `k3s_version`, when its inputs differ from the recorded ones, or when the unit file no longer matches the record.
+
+A node with no record restarts once, on the first run that writes one. A node upgraded or reconfigured outside these roles, including by `upgrade.yml`, restarts once on the next run for the same reason. The record is written only after the service is up, so a run that fails between changing a file and restarting restarts the node on the next run.
+
+In check mode nothing is written, so a pending install, config write or environment change reports the restart it would cause, and the record's diff shows which input moved.
+
 ### Rolling the nodes one at a time
 
-The server and agent roles restart their k3s service on every run, not only when something changed, and by default Ansible runs each play against every host in the group at once. On a cluster with three or more servers that restarts every etcd member together, which loses the quorum and the API server with it.
+By default Ansible runs each play against every host in the group at once. A run that restarts k3s on a cluster with three or more servers then restarts every etcd member together, which loses the quorum and the API server with it.
 
 `k3s_server_serial` sets the `serial` of the server play and `k3s_agent_serial` sets it for the agent play. Setting the server one to `1` runs the whole server role against one node before the next node starts, and setting the agent one to `1` does the same for the agents, which keeps the workload on the other nodes while one kubelet is down.
 
@@ -186,7 +194,7 @@ Both default to `100%`, which is the whole group in one batch, so a run that set
 
 ### Waiting for a node to come back
 
-Rolling the play one node at a time is not enough on its own. The role returns as soon as the service manager reports the k3s service started, which is well before the node serves again. Two gates hold the play at the end of the role until it does. Both are off by default, both are independent of each other, and both are skipped in check mode.
+Rolling the play one node at a time is not enough on its own. The role returns as soon as the service manager reports the k3s service started, which is well before the node serves again. Two gates hold the play at the end of the role until it does, and pass at once on a node that did not restart. Both are off by default, both are independent of each other, and both are skipped in check mode.
 
 `k3s_wait_ready` holds the node until the API server reports it `Ready`. That proves the kubelet has registered and is accepting workload, and it says nothing about etcd. A server checks itself; an agent holds no kubeconfig, so its check runs on the first server.
 
@@ -224,7 +232,7 @@ ansible-playbook k3s.orchestration.upgrade -i inventory.yml
 ansible-playbook playbooks/upgrade.yml -i inventory.yml
 ```
 
-Re-running the `site.yml` playbook after bumping `k3s_version` performs the same upgrade declaratively: it restarts the k3s services so the cluster picks up the new runtime. On a multi-server (HA) cluster, roll the servers one at a time and turn on the etcd voter gate, so that a member is a voter again before the next one restarts. See [Rolling the nodes one at a time](#rolling-the-nodes-one-at-a-time) and [Waiting for a node to come back](#waiting-for-a-node-to-come-back):
+Re-running the `site.yml` playbook after bumping `k3s_version` performs the same upgrade declaratively: the new binary restarts the k3s services so the cluster picks up the new runtime. On a multi-server (HA) cluster, roll the servers one at a time and turn on the etcd voter gate, so that a member is a voter again before the next one restarts. See [Rolling the nodes one at a time](#rolling-the-nodes-one-at-a-time) and [Waiting for a node to come back](#waiting-for-a-node-to-come-back):
 
 ```bash
 ansible-playbook playbooks/site.yml -i inventory.yml -e k3s_server_serial=1 -e k3s_wait_ready=true -e k3s_server_wait_etcd_voters=true

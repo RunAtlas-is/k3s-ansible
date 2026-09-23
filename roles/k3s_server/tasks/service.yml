@@ -1,0 +1,70 @@
+---
+# K3s reads its binary, its unit file, its environment file and its config file
+# when it starts. Their checksums, recorded once the service is up, describe
+# what the running process started from, so a difference means something it
+# depends on changed since, whether in this run, in a run that failed before
+# the restart, or outside this role. Check mode writes none of the files, so it
+# counts a pending write or install as a difference instead.
+- name: Read the checksums of the files K3s starts from
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - /usr/local/bin/k3s
+    - "{{ k3s_server_unit_file }}"
+    - "{{ k3s_server_env_file }}"
+    - /etc/rancher/k3s/config.yaml
+  register: k3s_server_service_files
+
+- name: Decide whether K3s has to restart
+  vars:
+    _files: >-
+      {{ dict(k3s_server_service_files.results | map(attribute='item')
+         | zip(k3s_server_service_files.results | map(attribute='stat.checksum', default='absent'))) }}
+  ansible.builtin.set_fact:
+    k3s_server_service_state:
+      install: "{{ k3s_server_install_digest }}"
+      files: "{{ _files }}"
+    k3s_server_restart_needed: >-
+      {{ _files != k3s_server_service_state_last.files | default({})
+         or (ansible_check_mode
+             and (k3s_server_install_needed
+                  or k3s_server_config_result is changed
+                  or k3s_server_env_result is changed
+                  or k3s_server_env_token_result is changed)) }}
+
+# The install script reloads systemd itself, but a unit file changed any other
+# way needs the reload before the restart picks it up.
+- name: Reload systemd daemon
+  when:
+    - k3s_server_restart_needed
+    - ansible_facts['service_mgr'] == 'systemd'
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Restart K3s service
+  when:
+    - k3s_server_restart_needed
+    - not k3s_server_check_on_clean_host
+  ansible.builtin.service:
+    name: k3s
+    state: restarted
+    enabled: true
+
+- name: Enable and start K3s service
+  when:
+    - not k3s_server_restart_needed
+    - not k3s_server_check_on_clean_host
+  ansible.builtin.service:
+    name: k3s
+    state: started
+    enabled: true
+
+# Written only once the service is up with the files above, so a run that fails
+# before this point restarts on the next one.
+- name: Record the state K3s started with
+  ansible.builtin.copy:
+    content: "{{ k3s_server_service_state | to_nice_json }}\n"
+    dest: "{{ k3s_service_state_file }}"
+    owner: root
+    group: root
+    mode: "0600"
