@@ -114,6 +114,7 @@
   register: k3s_agent_config_result
 
 - name: Get the token from the first server
+  no_log: true
   when: token is not defined and hostvars[groups[server_group][0]].random_token is defined
   # noqa var-naming[no-role-prefix]
   ansible.builtin.set_fact:
@@ -128,6 +129,7 @@
   register: k3s_agent_env_result
 
 - name: Delete any existing token from the environment if different from the new one
+  diff: false
   ansible.builtin.lineinfile:
     state: absent
     path: "{{ k3s_agent_env_file }}"

@@ -100,6 +100,7 @@
 
     # If token is provided, add it to the config
     - name: Add token to server config
+      no_log: true
       when: token is defined
       ansible.builtin.set_fact:
         k3s_server_config: "{{ k3s_server_config | combine({'token': token}) }}"
@@ -121,6 +122,7 @@
           {% endif %}
 
     - name: Add TLS SAN to config if needed
+      no_log: true
       when:
         - api_endpoint is defined
         - api_endpoint != ansible_facts['hostname']
@@ -130,6 +132,7 @@
         k3s_server_config: "{{ k3s_server_config | combine({'tls-san': api_endpoint}) }}"
 
     - name: Add cluster-init to server config for first server in HA-IC setup
+      no_log: true
       when:
         - (groups[server_group] | length) > 1
         - inventory_hostname == groups[server_group][0] or ansible_host == groups[server_group][0]
@@ -140,12 +143,14 @@
     # If not the first server in an HA-IC setup, setup the server: URL for joining the cluster
     # server: https://{{ api_endpoint }}:{{ api_port }}
     - name: Add server URL to server config for joining servers in HA-IC setup
+      no_log: true
       when: (groups[server_group] | length) > 1 and inventory_hostname != groups[server_group][0] and not use_external_database
       ansible.builtin.set_fact:
         k3s_server_config: "{{ k3s_server_config | combine({'server': 'https://' + (api_endpoint | ansible.utils.ipwrap) + ':' + api_port | string}) }}"
 
     # If the user has provided additional server config, merge it with the generated config
     - name: Merge user server config with generated server config
+      no_log: true
       when: server_config_yaml is defined
       ansible.builtin.set_fact:
         k3s_server_config: "{{ k3s_server_config | combine(server_config_yaml | from_yaml) }}"
@@ -221,6 +226,7 @@
       diff: false
 
     - name: Delete any existing token from the environment if different from the new one
+      diff: false
       ansible.builtin.lineinfile:
         state: absent
         path: "{{ k3s_server_env_file }}"
@@ -312,11 +318,13 @@
             path: /var/lib/rancher/k3s/server/token
 
         - name: Read node-token from first server
+          no_log: true
           ansible.builtin.slurp:
             src: /var/lib/rancher/k3s/server/token
           register: k3s_server_node_token
 
         - name: Store random token for later servers
+          no_log: true
           # noqa var-naming[no-role-prefix]
           ansible.builtin.set_fact:
             random_token: "{{ k3s_server_node_token.content | b64decode | regex_replace('\n', '') }}"
@@ -327,6 +335,7 @@
     - inventory_hostname != groups[server_group][0] and ansible_host != groups[server_group][0]
   block:
     - name: Get token from first server if needed
+      no_log: true
       when: token is not defined and hostvars[groups[server_group][0]].random_token is defined
       # noqa var-naming[no-role-prefix]
       ansible.builtin.set_fact:
@@ -342,6 +351,7 @@
       diff: false
 
     - name: Delete any existing token from the environment if different from the new one
+      diff: false
       ansible.builtin.lineinfile:
         state: absent
         path: "{{ k3s_server_env_file }}"
