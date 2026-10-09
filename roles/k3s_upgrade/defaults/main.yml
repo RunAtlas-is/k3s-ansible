@@ -13,4 +13,8 @@ k3s_server_config_mode: "0644"  # noqa var-naming[no-role-prefix]
 k3s_node_name: "{{ ansible_facts['nodename'] | default(inventory_hostname, true) | lower }}"  # noqa var-naming[no-role-prefix]
 k3s_wait_ready: false  # noqa var-naming[no-role-prefix]
 k3s_server_wait_etcd_voters: false  # noqa var-naming[no-role-prefix]
+# Path, on the node, of a K3s binary of k3s_version that is already verified.
+# When set, the install script downloads nothing and the service is stopped
+# only while this binary replaces the installed one.
+k3s_upgrade_staged_binary: ""
 # api_endpoint must be provided by inventory for agent nodes

@@ -366,14 +366,26 @@ jobs:
         run: |
           sed -i 's/k3s_version: v1.33.4+k3s1/k3s_version: v1.34.1+k3s1/' tests/ha.yml
 
+      # The HA upgrade takes the binary from the node's own disk, so the
+      # service is stopped only while the binary is replaced.
+      - name: Stage the upgrade binary on every node
+        run: |
+          for NODE in $SERVERS $AGENTS; do
+            docker exec $NODE sh -c 'curl -sfL -o /var/tmp/k3s-staged https://github.com/k3s-io/k3s/releases/download/v1.34.1%2Bk3s1/k3s && chmod 0755 /var/tmp/k3s-staged'
+          done
+
       - name: Run Upgrade Playbook
-        run: ansible-playbook playbooks/upgrade.yml -i tests/ha.yml -e k3s_wait_ready=true -e k3s_server_wait_etcd_voters=true
+        run: >-
+          ansible-playbook playbooks/upgrade.yml -i tests/ha.yml
+          -e k3s_wait_ready=true -e k3s_server_wait_etcd_voters=true
+          -e k3s_upgrade_staged_binary=/var/tmp/k3s-staged
 
       - name: Verify K3s upgraded on all nodes
         run: |
           sleep 5 && docker exec server-node1 k3s kubectl get nodes
           for NODE in $SERVERS $AGENTS; do
             docker exec $NODE k3s --version | grep v1.34.
+            docker exec $NODE cmp /var/tmp/k3s-staged /usr/local/bin/k3s
           done
         
       - name: Wait for all deployments to be ready

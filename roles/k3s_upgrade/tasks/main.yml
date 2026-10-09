@@ -47,13 +47,47 @@
           tags:
             - distribute_artifacts
 
-    # We must stop the service because we want to modify the service file before starting it again.
-    # INSTALL_K3S_SKIP_START does work on upgrades, because the service is already installed and started.
-    - name: Stop K3s service
-      when: k3s_upgrade_current_version is version(k3s_version, '<')
-      ansible.builtin.service:
-        state: stopped
-        name: "{{ (server_group in group_names) | ternary('k3s', 'k3s-agent') }}"
+    # A staged binary is checked while K3s still runs, so a missing file or a
+    # binary of another version fails the run before anything on the node
+    # changes. `k3s --version` writes nothing to the node.
+    - name: Check the staged K3s binary
+      when:
+        - k3s_upgrade_staged_binary | length > 0
+        - k3s_upgrade_current_version is version(k3s_version, '<')
+      block:
+        - name: Look for the staged K3s binary
+          ansible.builtin.stat:
+            path: "{{ k3s_upgrade_staged_binary }}"
+            get_checksum: false
+          register: k3s_upgrade_staged_stat
+
+        # A dry run ahead of the staging has no file to read yet.
+        - name: Assert the staged K3s binary is present and executable
+          ansible.builtin.assert:
+            that: >-
+              ansible_check_mode
+              or (k3s_upgrade_staged_stat.stat.exists and k3s_upgrade_staged_stat.stat.executable)
+            fail_msg: "{{ k3s_upgrade_staged_binary }} is missing or not executable on {{ inventory_hostname }}."
+            quiet: true
+
+        - name: Read the version of the staged K3s binary
+          when: k3s_upgrade_staged_stat.stat.exists
+          ansible.builtin.command:
+            argv:
+              - "{{ k3s_upgrade_staged_binary }}"
+              - --version
+          register: k3s_upgrade_staged_version
+          changed_when: false
+          check_mode: false
+
+        - name: Assert the staged K3s binary is the requested version
+          when: k3s_upgrade_staged_stat.stat.exists
+          ansible.builtin.assert:
+            that: k3s_upgrade_staged_version.stdout_lines[0].split(' ')[2] == k3s_version
+            fail_msg: >-
+              {{ k3s_upgrade_staged_binary }} is
+              {{ k3s_upgrade_staged_version.stdout_lines[0].split(' ')[2] }}, not {{ k3s_version }}.
+            quiet: true
 
     # We only save the token if the user did not provide one, leading to an auto-generated token on first install.
     # If you want the actual token value, you need to use the k3s_upgrade_old_token.stdout
@@ -147,6 +181,20 @@
             mode: "{{ k3s_server_config_mode }}"
           register: k3s_server_config_result
 
+    # K3s reads its config file, unit file and environment file only when it
+    # starts, so everything above is written while the old version still runs.
+    # Without a staged binary the install script downloads and replaces the
+    # binary and rewrites the unit file in one pass, so the service is stopped
+    # first. INSTALL_K3S_SKIP_START does work on upgrades, because the service
+    # is already installed and started.
+    - name: Stop K3s service
+      when:
+        - k3s_upgrade_current_version is version(k3s_version, '<')
+        - k3s_upgrade_staged_binary | length == 0
+      ansible.builtin.service:
+        state: stopped
+        name: "{{ (server_group in group_names) | ternary('k3s', 'k3s-agent') }}"
+
     - name: Install new K3s Version [server]
       # For some reason, ansible-lint thinks using enviroment with command is an error
       # even though its valid https://ansible.readthedocs.io/projects/lint/rules/inline-env-var/#correct-code
@@ -163,7 +211,8 @@
                "INSTALL_K3S_VERSION": k3s_version,
                "INSTALL_K3S_EXEC": extra_server_args,
              })
-             | combine(airgap_dir is defined and {"INSTALL_K3S_SKIP_DOWNLOAD": "true"} or {}) }}
+             | combine((airgap_dir is defined or k3s_upgrade_staged_binary | length > 0)
+                       and {"INSTALL_K3S_SKIP_DOWNLOAD": "true"} or {}) }}
       changed_when: true
 
     - name: Get the token from the first server
@@ -188,7 +237,9 @@
       environment: "{{ _install_envs }}"
       vars:
         _base_envs:
-          INSTALL_K3S_SKIP_DOWNLOAD: "{{ (airgap_dir is defined or k3s_upgrade_current_version == k3s_version) | ternary('true', 'false') }}"
+          INSTALL_K3S_SKIP_DOWNLOAD: >-
+            {{ (airgap_dir is defined or k3s_upgrade_staged_binary | length > 0
+                or k3s_upgrade_current_version == k3s_version) | ternary('true', 'false') }}
           INSTALL_K3S_SKIP_START: "true"
           INSTALL_K3S_SYSTEMD_DIR: "{{ systemd_dir }}"
           INSTALL_K3S_VERSION: "{{ k3s_version }}"
@@ -204,6 +255,33 @@
         - ansible_facts['service_mgr'] == 'systemd'
       ansible.builtin.systemd:
         daemon_reload: true
+
+    # With a staged binary the install script above left the binary alone, so
+    # the service is down only for the three tasks from here: stop, replace the
+    # binary, start. `removes` makes a dry run report the replacement, which the
+    # command module otherwise skips.
+    - name: Stop K3s service to replace its binary
+      when:
+        - k3s_upgrade_current_version is version(k3s_version, '<')
+        - k3s_upgrade_staged_binary | length > 0
+      ansible.builtin.service:
+        state: stopped
+        name: "{{ (server_group in group_names) | ternary('k3s', 'k3s-agent') }}"
+
+    - name: Replace the K3s binary with the staged one
+      when:
+        - k3s_upgrade_current_version is version(k3s_version, '<')
+        - k3s_upgrade_staged_binary | length > 0
+      ansible.builtin.command:
+        argv:
+          - install
+          - --owner=root
+          - --group=root
+          - --mode=0755
+          - "{{ k3s_upgrade_staged_binary }}"
+          - /usr/local/bin/k3s
+        removes: /usr/local/bin/k3s
+      changed_when: true
 
     - name: Restart K3s service [server]
       when: server_group in group_names
