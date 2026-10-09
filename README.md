@@ -240,6 +240,16 @@ ansible-playbook playbooks/site.yml -i inventory.yml -e k3s_server_serial=1 -e k
 
 The dedicated `upgrade.yml` playbook performs the same upgrade on its own, and rolls the servers one at a time by default.
 
+### Upgrading from a staged binary
+
+By default the upgrade role stops the k3s service and then runs the install script, which downloads the new binary, so the service stays down for the download and for everything the script writes. Set `k3s_upgrade_staged_binary` to the path of a K3s binary of `k3s_version` that is already on the node and already verified:
+
+```yaml
+k3s_upgrade_staged_binary: /var/lib/rancher/k3s-staged/k3s
+```
+
+The role then checks that the file is executable and reports `k3s_version`, writes `config.yaml`, and runs the install script without a download, all while the old version still runs. K3s reads its config, unit and environment files only when it starts. The service is down for three tasks: stop, replace the binary, start. Placing the binary and verifying its checksum are the caller's; the role does not fetch it. With the default, an empty value, the role stops the service first and the install script downloads the binary.
+
 ## Airgap Install
 
 Airgap installation is supported via the `airgap_dir` variable. This variable should be set to the path of a directory containing the K3s binary and images. The release artifacts can be downloaded from the [K3s Releases](https://github.com/k3s-io/k3s/releases). You must download the appropriate images for you architecture (any of the compression formats will work). Additionally, you must run the `airgap` role to set up the airgapped environment.
