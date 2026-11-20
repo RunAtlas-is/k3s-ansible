@@ -260,7 +260,8 @@
     - name: Copy k3s.yaml to second file
       when:
         - k3s_server_fetch_kubeconfig | bool
-        - not k3s_server_check_on_clean_host
+        # Unset under --tags kubeconfig, which skips the untagged set_fact.
+        - not (k3s_server_check_on_clean_host | default(false) | bool)
       ansible.builtin.copy:
         src: /etc/rancher/k3s/k3s.yaml
         dest: /etc/rancher/k3s/k3s-copy.yaml
