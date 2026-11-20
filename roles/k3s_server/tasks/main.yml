@@ -245,6 +245,7 @@
 
     - name: Check whether kubectl is installed on control node
       # noqa var-naming[no-role-prefix]
+      when: k3s_server_fetch_kubeconfig | bool
       ansible.builtin.command: 'kubectl'
       register: kubectl_installed
       tags: kubeconfig
@@ -257,7 +258,10 @@
     # If no changes are found, we can skip copying the kubeconfig to the control node.
     # This is dependent on the speed of the target node for k3s startup time, so retries are used.
     - name: Copy k3s.yaml to second file
-      when: not k3s_server_check_on_clean_host
+      when:
+        - k3s_server_fetch_kubeconfig | bool
+        # Unset under --tags kubeconfig, which skips the untagged set_fact.
+        - not (k3s_server_check_on_clean_host | default(false) | bool)
       ansible.builtin.copy:
         src: /etc/rancher/k3s/k3s.yaml
         dest: /etc/rancher/k3s/k3s-copy.yaml
@@ -269,7 +273,9 @@
 
     - name: Apply K3S kubeconfig to control node
       when:
+        - k3s_server_fetch_kubeconfig | bool
         - kubectl_installed.rc == 0 and (k3s_server_copy_yaml.changed or 'kubeconfig' in ansible_run_tags)
+      tags: kubeconfig
       block:
         - name: Copy kubeconfig to control node
           ansible.builtin.fetch:

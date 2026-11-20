@@ -5,6 +5,14 @@ k3s_server_location: "/var/lib/rancher/k3s"
 k3s_server_config_mode: "0644"
 systemd_dir: "/etc/systemd/system"  # noqa var-naming[no-role-prefix]
 api_port: 6443  # noqa var-naming[no-role-prefix]
+# The first server copies the cluster admin kubeconfig to the control node
+# only when this is true. With the default kubeconfig path the copy is then
+# merged into the control node account's ~/.kube/config and its context made
+# current, so a run from an account whose ~/.kube/config serves another
+# purpose would replace that account's cluster credential with cluster
+# admin. Off, the control node receives no cluster credential and no
+# kubeconfig there is read or written.
+k3s_server_fetch_kubeconfig: false
 kubeconfig: ~/.kube/config.new  # noqa var-naming[no-role-prefix]
 user_kubectl: true  # noqa var-naming[no-role-prefix]
 cluster_context: k3s-ansible  # noqa var-naming[no-role-prefix]
