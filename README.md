@@ -275,7 +275,11 @@ The K3s binary in `airgap_dir` is supplied by you, not fetched by the role, so n
 
 ## Kubeconfig
 
-After successful bringup, the kubeconfig of the cluster is copied to the control node  and merged with `~/.kube/config` under the `k3s-ansible` context unless overwritten by the `cluster_context` variable.
+The cluster kubeconfig is a cluster admin credential, so the first server copies it to the control node only when `k3s_server_fetch_kubeconfig` is `true`. It defaults to `false`: the control node then receives no copy and no kubeconfig there is read or written, whichever account runs the playbook.
+
+Every task of the copy carries the `kubeconfig` tag, so `--skip-tags kubeconfig` also leaves them out of the play, and of `--list-tasks`, whatever the variable says.
+
+With `k3s_server_fetch_kubeconfig: true`, the kubeconfig is copied to the control node after bringup and merged with that account's `~/.kube/config` under the `k3s-ansible` context, unless overwritten by the `cluster_context` variable, and that context becomes the current one.
 Assuming you have [kubectl](https://kubernetes.io/docs/tasks/tools/#kubectl) installed, you can confirm access to your **Kubernetes** cluster with the following:
 
 ```bash
@@ -285,18 +289,18 @@ kubectl get nodes
 
 If you wish for your kubeconfig to be copied elsewhere and not merged, you can set the `kubeconfig` variable in `inventory.yml` to the desired path.
 
-If you wish to get a new copy of the kubeconfig after installation you can run the site playbook again using the `kubeconfig` tag.
+If you wish to get a new copy of the kubeconfig after installation you can run the site playbook again using the `kubeconfig` tag, with `k3s_server_fetch_kubeconfig` set to `true`.
 
 *Installed with ansible-galaxy*
 
 ```bash
-ansible-playbook k3s.orchestration.site -i inventory.yml --tags kubeconfig
+ansible-playbook k3s.orchestration.site -i inventory.yml --tags kubeconfig -e k3s_server_fetch_kubeconfig=true
 ```
 
 *Running the playbook from inside the repository*
 
 ```bash
-ansible-playbook playbooks/site.yml -i inventory.yml --tags kubeconfig
+ansible-playbook playbooks/site.yml -i inventory.yml --tags kubeconfig -e k3s_server_fetch_kubeconfig=true
 ```
 ## Local Testing
 

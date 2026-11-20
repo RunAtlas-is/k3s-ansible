@@ -69,6 +69,14 @@ jobs:
       - name: Verify Inventory
         run: ansible-inventory -i tests/${{ matrix.inventory }}.yml --list
 
+      - name: Verify --skip-tags kubeconfig leaves out every kubeconfig copy task
+        run: |
+          pattern='control node|second file'
+          ansible-playbook playbooks/site.yml -i tests/${{ matrix.inventory }}.yml --list-tasks > "$RUNNER_TEMP/tasks-all.txt"
+          ansible-playbook playbooks/site.yml -i tests/${{ matrix.inventory }}.yml --list-tasks --skip-tags kubeconfig > "$RUNNER_TEMP/tasks-skip.txt"
+          test "$(grep -c -E "$pattern" "$RUNNER_TEMP/tasks-all.txt")" -eq 6
+          if grep -E "$pattern" "$RUNNER_TEMP/tasks-skip.txt"; then exit 1; fi
+
       - name: Create Docker Network
         run: docker network create k3s-ansible
 
@@ -113,6 +121,29 @@ jobs:
       - name: Replace k3s_version in inventory
         run: |
           sed -i "s/k3s_version: .*/k3s_version: ${STARTING_K3S_VERSION}/" tests/${{ matrix.inventory }}.yml
+
+      - name: Seed a control node kubeconfig the playbook must not touch
+        run: |
+          mkdir -p ~/.kube
+          cat > ~/.kube/config <<'KUBECONFIG'
+          apiVersion: v1
+          kind: Config
+          current-context: sentinel
+          contexts:
+            - name: sentinel
+              context:
+                cluster: sentinel
+                user: sentinel
+          clusters:
+            - name: sentinel
+              cluster:
+                server: https://sentinel.invalid:6443
+          users:
+            - name: sentinel
+              user: {}
+          KUBECONFIG
+          sha256sum ~/.kube/config > "$RUNNER_TEMP/kubeconfig.sha256"
+          kubectl version --client
 
       - name: Run Playbook
         env:
@@ -244,6 +275,30 @@ jobs:
             fi
           done
           exit 1
+
+      # Three site runs (install, version bump, args change with a restart)
+      # have now passed with k3s_server_fetch_kubeconfig at its default.
+      - name: Verify no site run wrote a kubeconfig on the control node
+        run: |
+          sha256sum --check "$RUNNER_TEMP/kubeconfig.sha256"
+          test ! -e ~/.kube/config.new
+          test "$(kubectl config current-context)" = sentinel
+
+      # Proves the check above can fail: the same run with the copy turned on
+      # rewrites the seeded file and switches its current context.
+      - name: Run site Playbook with the kubeconfig copy turned on
+        if: matrix.service_mgr == 'systemd' && matrix.inventory == 'basic'
+        run: ansible-playbook playbooks/site.yml -i tests/${{ matrix.inventory }}.yml -e k3s_wait_ready=true -e k3s_server_fetch_kubeconfig=true
+
+      - name: Verify the opted-in run merged the kubeconfig
+        if: matrix.service_mgr == 'systemd' && matrix.inventory == 'basic'
+        run: |
+          if sha256sum --check --status "$RUNNER_TEMP/kubeconfig.sha256"; then
+            echo "the opted-in run left the seeded kubeconfig unchanged"
+            exit 1
+          fi
+          test "$(kubectl config current-context)" = k3s-ansible
+          kubectl config get-contexts sentinel
 
       - name: Debug nodes/pods on failure
         if: failure()
